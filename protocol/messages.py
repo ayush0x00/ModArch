@@ -52,6 +52,14 @@ class ToolResult(BaseModel):
     ts: str | None = None
 
 
+class ToolProgress(BaseModel):
+    """Optional: agent sends 0+ progress updates before ToolResult. progress is free-form (e.g. percent, message, stage)."""
+    type: Literal["tool_progress"] = "tool_progress"
+    call_id: str
+    progress: dict[str, Any] = Field(default_factory=dict)
+    ts: str | None = None
+
+
 class Ping(BaseModel):
     type: Literal["ping"] = "ping"
     id: str
@@ -100,7 +108,7 @@ class Error(BaseModel):
 
 # --- Union types for parsing ---
 
-AgentToMaster = Register | Query | ToolResult | Ping
+AgentToMaster = Register | Query | ToolResult | ToolProgress | Ping
 MasterToAgent = Registered | QueryResult | ToolCall | Pong | Error
 
 
@@ -113,6 +121,7 @@ def parse_message(raw: dict[str, Any]) -> AgentToMaster | MasterToAgent | None:
         "register": Register,
         "query": Query,
         "tool_result": ToolResult,
+        "tool_progress": ToolProgress,
         "ping": Ping,
         "registered": Registered,
         "query_result": QueryResult,

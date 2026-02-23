@@ -49,6 +49,11 @@ COMPLEX_QUERIES = [
     "Run a search query for 'orchestration' with limit 5.",
 ]
 
+# Progress: long-running tool that reports progress (WS or invocation agent with long_task)
+PROGRESS_QUERIES = [
+    "Run a long task for 2 seconds and report progress.",
+]
+
 # Stress: many similar queries to flood the orchestrator
 STRESS_QUERIES = [
     "What time is it?",
@@ -56,10 +61,10 @@ STRESS_QUERIES = [
     "Add 1 and 1.",
 ] * 10  # 30 queries
 
-# All combined for full load test
+# All combined for full load test (includes one progress query)
 def get_all_queries(max_per_category: int | None = None) -> list[str]:
     out = []
-    for q in SINGLE_TOOL_QUERIES + COMPLEX_QUERIES:
+    for q in SINGLE_TOOL_QUERIES + COMPLEX_QUERIES + PROGRESS_QUERIES:
         if max_per_category and len(out) >= max_per_category:
             break
         out.append(q)

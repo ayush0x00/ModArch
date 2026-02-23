@@ -97,7 +97,7 @@ Starts an HTTP server and registers with the master once. No WebSocket. Master i
 python agents/query_demo.py
 ```
 
-Sends example queries; the orchestrator calls the weather or echo/get_time tools and returns answers.
+Sends example queries (including a long-task that exercises **progress**); the orchestrator calls the weather or echo/get_time/long_task tools. Watch the master terminal for `progress (WS)` or `progress (HTTP)` lines.
 
 ## Master HTTP endpoints
 
@@ -108,6 +108,8 @@ Sends example queries; the orchestrator calls the weather or echo/get_time tools
 | `GET /refresh` | Re-fetch Redis cache and run health checks on invocation agents; returns and prints UP/DOWN |
 | `POST /register` | Register an action agent by `invocation_base_url` + tools (with optional per-tool `endpoint`). Redis only. |
 | `POST /tool_callback` | Used by invocation agents to post tool results back (call_id, success, result/error) |
+| `POST /tool_progress` | Optional: invocation agents POST progress (call_id, progress) during long tool runs |
+| `GET /tool_progress/{call_id}` | Optional: poll latest progress for a tool call |
 
 WebSocket at `/ws`: connect, send `register`, then `query` (query agents) or receive `tool_call` (action agents).
 

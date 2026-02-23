@@ -23,6 +23,7 @@ from protocol import (
     Registered,
     Register,
     ToolCall,
+    ToolProgress,
     ToolResult,
     ToolSchema,
     parse_message,
@@ -37,6 +38,7 @@ from master.tracker import AgentTracker
 registry = AgentRegistry()
 tracker = AgentTracker()
 pending_tool_results: dict[str, tuple[asyncio.Future[ToolResult], Any, str, str | None]] = {}  # call_id -> (future, query_send, query_id, agent_id_for_ttl|None)
+tool_progress: dict[str, dict[str, Any]] = {}  # call_id -> latest progress (optional feature)
 
 GREEN = "\033[92m"
 RED = "\033[91m"
@@ -246,13 +248,21 @@ async def websocket_endpoint(ws: WebSocket):
                     if invocation_url:
                         # HTTP invoke: POST to per-tool URL; callback will complete the future
                         callback_url = f"{config.MASTER_BASE_URL}/tool_callback"
-                        payload = {"call_id": call_id, "tool_name": tname, "arguments": args, "callback_url": callback_url}
+                        progress_callback_url = f"{config.MASTER_BASE_URL}/tool_progress"
+                        payload = {
+                            "call_id": call_id,
+                            "tool_name": tname,
+                            "arguments": args,
+                            "callback_url": callback_url,
+                            "progress_callback_url": progress_callback_url,
+                        }
                         print(f"[Orchestrator] calling {aid}.{tname}({args}) via HTTP @ {invocation_url}")
                         try:
                             async with httpx.AsyncClient(timeout=config.TOOL_INVOKE_HTTP_TIMEOUT) as http:
                                 await http.post(invocation_url, json=payload)
                         except Exception as e:
                             pending_tool_results.pop(call_id, None)
+                            tool_progress.pop(call_id, None)
                             await send_msg(QueryResult(id=parsed.id, error=f"Invocation failed: {e}"))
                             continue
                     else:
@@ -260,6 +270,7 @@ async def websocket_endpoint(ws: WebSocket):
                         action_agent = registry.get_action(aid)
                         if not action_agent:
                             pending_tool_results.pop(call_id, None)
+                            tool_progress.pop(call_id, None)
                             await send_msg(QueryResult(id=parsed.id, error=f"Unknown action agent: {aid}"))
                             continue
                         print(f"[Orchestrator] calling {aid}.{tname}({args}) via WS")
@@ -269,10 +280,12 @@ async def websocket_endpoint(ws: WebSocket):
                         tool_res: ToolResult = await asyncio.wait_for(fut, timeout=config.TOOL_CALL_TIMEOUT)
                     except asyncio.TimeoutError:
                         pending_tool_results.pop(call_id, None)
+                        tool_progress.pop(call_id, None)
                         print(f"[Orchestrator] {aid}.{tname} -> timeout")
                         await send_msg(QueryResult(id=parsed.id, error="Tool call timed out"))
                         continue
                     pending_tool_results.pop(call_id, None)
+                    tool_progress.pop(call_id, None)
                     if tool_res.success:
                         print(f"[Orchestrator] {aid}.{tname} -> ok: {tool_res.result}")
                         await send_msg(QueryResult(id=parsed.id, result=tool_res.result))
@@ -281,12 +294,18 @@ async def websocket_endpoint(ws: WebSocket):
                         await send_msg(QueryResult(id=parsed.id, error=tool_res.error or "Tool failed"))
                     continue
 
+            if isinstance(parsed, ToolProgress):
+                tool_progress[parsed.call_id] = parsed.progress
+                print(f"[Orchestrator] progress (WS): {parsed.call_id} -> {parsed.progress}", flush=True)
+                continue
+
             if isinstance(parsed, ToolResult):
                 entry = pending_tool_results.get(parsed.call_id)
                 if entry:
                     fut = entry[0]
                     if not fut.done():
                         fut.set_result(parsed)
+                tool_progress.pop(parsed.call_id, None)
                 continue
 
             if isinstance(parsed, Ping):
@@ -332,7 +351,34 @@ async def tool_callback(request: Request):
         fut.set_result(tool_res)
     if success and agent_id_ttl and _redis:
         await refresh_agent_ttl(_redis, agent_id_ttl)
+    tool_progress.pop(call_id, None)
     return JSONResponse({"ok": True})
+
+
+@app.post("/tool_progress")
+async def tool_progress_post(request: Request):
+    """Optional: invocation agents POST progress here; stored by call_id until tool_callback completes."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    call_id = body.get("call_id")
+    progress = body.get("progress")
+    if not call_id:
+        return JSONResponse({"ok": False, "error": "call_id required"}, status_code=400)
+    if call_id not in pending_tool_results:
+        return JSONResponse({"ok": False, "error": "Unknown or expired call_id"}, status_code=404)
+    tool_progress[call_id] = progress if isinstance(progress, dict) else {"message": str(progress)}
+    print(f"[Orchestrator] progress (HTTP): {call_id} -> {tool_progress[call_id]}", flush=True)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/tool_progress/{call_id}")
+async def tool_progress_get(call_id: str):
+    """Optional: get latest progress for a tool call (e.g. for polling). 404 if unknown or completed."""
+    if call_id not in tool_progress:
+        return JSONResponse({"error": "Unknown or expired call_id"}, status_code=404)
+    return JSONResponse({"call_id": call_id, "progress": tool_progress[call_id]})
 
 
 @app.post("/register")

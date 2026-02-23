@@ -1,19 +1,19 @@
 {
   "test_name": "baseline",
-  "timestamp": "2026-02-19T11:32:00.147969+00:00",
+  "timestamp": "2026-02-19T12:07:09.134704+00:00",
   "metrics": {
     "total": 33,
     "ok": 33,
     "errors": 0,
     "success_rate": 1.0,
     "error_rate": 0.0,
-    "elapsed_sec": 26.12,
-    "qps": 1.26,
+    "elapsed_sec": 39.38,
+    "qps": 0.84,
     "valid_result_rate": 1.0,
     "error_breakdown": {},
     "correctness_checks": 7,
-    "correctness_pass": 6,
-    "correctness_rate": 0.8571
+    "correctness_pass": 7,
+    "correctness_rate": 1.0
   },
   "num_queries": 33,
   "queries": [
@@ -82,7 +82,7 @@
     {
       "status": "ok",
       "value": {
-        "iso": "2026-02-19T11:31:37.926985+00:00",
+        "iso": "2026-02-19T12:06:38.087830+00:00",
         "timezone": "UTC"
       }
     },
@@ -166,13 +166,13 @@
     {
       "status": "ok",
       "value": {
-        "uuid": "84c6cd87-437a-44c3-b507-8db562fd9d4c"
+        "uuid": "d2e7f36b-a062-4a74-bec4-2aad5632737d"
       }
     },
     {
       "status": "ok",
       "value": {
-        "amount": 60466176000
+        "amount": 1628.894626777442
       }
     },
     {
@@ -206,7 +206,7 @@
     {
       "status": "ok",
       "value": {
-        "iso": "2026-02-19T11:31:47.345138+00:00",
+        "iso": "2026-02-19T12:06:59.081462+00:00",
         "timezone": "UTC"
       }
     },
@@ -295,7 +295,7 @@
     {
       "status": "ok",
       "value": {
-        "payment": 66666.66666666666
+        "payment": 954.8305909309076
       }
     },
     {

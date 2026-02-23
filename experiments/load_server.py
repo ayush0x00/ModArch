@@ -19,8 +19,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 import config
-from openagent import ToolSchema, register_invocation_agent
-from openagent.client import AgentClient
+from openagent import ToolSchema, OrchestratorActionAgent, OrchestratorInvocationAgent
 
 from experiments.complex_apps import get_app_tools_and_handler
 from experiments.complex_apps.apps import THEMES
@@ -53,13 +52,19 @@ async def run_process_agent(server_index: int, agent_index: int) -> None:
     async def handler(tool_name: str, arguments: dict):
         return await process_agent_tool_handler(server_index, agent_index, tool_name, arguments)
 
-    client = AgentClient(master_url=config.MASTER_WS, agent_id=agent_id, agent_type="action", tools=tools, tool_handler=handler, metadata={"server": server_index, "process_agent": agent_index})
+    agent = OrchestratorActionAgent(
+        agent_id,
+        tools,
+        handler,
+        metadata={"server": server_index, "process_agent": agent_index},
+    )
     try:
-        await client.run_action_agent()
+        await agent.register()
+        await agent.run()
     except asyncio.CancelledError:
         pass
     finally:
-        await client.close()
+        await agent.close()
 
 
 def main() -> None:
@@ -115,8 +120,9 @@ def main() -> None:
     time.sleep(1.0)
 
     async def main_async():
+        invocation_agent = OrchestratorInvocationAgent(agent_id, tools, base_url, metadata={"server_index": server_index})
         if os.environ.get("OPENAGENT_SKIP_HTTP_REGISTER") != "1":
-            await register_invocation_agent(agent_id, tools, base_url)
+            await invocation_agent.register()
             print(f"[load_server {server_index}] Registered HTTP agent {agent_id} ({len(tools)} tools) on {base_url}")
         else:
             print(f"[load_server {server_index}] HTTP agent {agent_id} on {base_url} (orchestrator will register)")

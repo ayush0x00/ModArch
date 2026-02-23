@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import httpx
-from openagent import connect_master
+from openagent import OrchestratorQueryAgent, OrchestratorInvocationAgent
 
 NUM_SERVERS = 10  # 10 FastAPI apps (complex agents)
 BASE_PORT = 9000
@@ -94,8 +94,8 @@ def _wait_for_health(port: int, timeout_sec: float = 10) -> bool:
     return False
 
 
-def register_all_agents_with_master() -> None:
-    """Register all 10 FastAPI agents with the orchestrator (HTTP POST /register), like demo_invocation_agent."""
+async def register_all_agents_with_master() -> None:
+    """Register all 10 FastAPI agents with the orchestrator via OrchestratorInvocationAgent."""
     from experiments.complex_apps import get_app_tools_and_handler
 
     host = os.environ.get("INVOCATION_HOST", "127.0.0.1")
@@ -107,20 +107,15 @@ def register_all_agents_with_master() -> None:
         tools, _ = get_app_tools_and_handler(i)
         agent_id = f"complex-app-{i}"
         invocation_base_url = f"http://{host}:{port}"
-        payload = {
-            "agent_id": agent_id,
-            "invocation_base_url": invocation_base_url,
-            "tools": [t.model_dump(exclude_none=True) for t in tools],
-            "metadata": {"server_index": i},
-        }
+        agent = OrchestratorInvocationAgent(
+            agent_id,
+            tools,
+            invocation_base_url,
+            metadata={"server_index": i},
+        )
         try:
-            r = httpx.post(f"{MASTER_BASE}/register", json=payload, timeout=10.0)
-            r.raise_for_status()
-            data = r.json()
-            if not data.get("ok"):
-                print(f"[register] {agent_id}: {data.get('error', 'failed')}")
-            else:
-                print(f"[register] {agent_id} OK ({len(tools)} tools) @ {invocation_base_url}")
+            await agent.register(master_base_url=MASTER_BASE)
+            print(f"[register] {agent_id} OK ({len(tools)} tools) @ {invocation_base_url}")
         except Exception as e:
             print(f"[register] {agent_id}: {e}")
 
@@ -172,9 +167,12 @@ async def run_queries(concurrency: int = 5, max_queries: int | None = None, quer
     start = time.perf_counter()
 
     async def run_one(query: str):
-        async with connect_master("load-test-query-agent", master_url=MASTER_WS) as client:
-            r = await client.query(query)
-            return r
+        agent = OrchestratorQueryAgent("load-test-query-agent")
+        await agent.register(master_url=MASTER_WS)
+        try:
+            return await agent.client.query(query)
+        finally:
+            await agent.close()
 
     sem = asyncio.Semaphore(concurrency)
 
@@ -243,7 +241,7 @@ def main() -> None:
         start_servers()
         _save_pids()
         print("Registering FastAPI agents with orchestrator...")
-        register_all_agents_with_master()
+        asyncio.run(register_all_agents_with_master())
         print("Servers are running. Use 'queries' to run load test, 'stop' to kill.")
         return
 
@@ -283,7 +281,7 @@ def main() -> None:
         start_servers()
         _save_pids()
         print("Registering FastAPI agents with orchestrator...")
-        register_all_agents_with_master()
+        asyncio.run(register_all_agents_with_master())
         try:
             print("Running load-test queries...")
             stats = asyncio.run(run_queries(concurrency=5))

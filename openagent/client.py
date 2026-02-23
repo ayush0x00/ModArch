@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -21,6 +22,7 @@ from protocol import (
     QueryResult,
     Registered,
     ToolCall,
+    ToolProgress,
     ToolResult,
     ToolSchema,
     parse_message,
@@ -126,8 +128,19 @@ class AgentClient:
                     f.cancel()
 
     async def _handle_tool_call(self, call: ToolCall) -> None:
+        """Run tool_handler; if it accepts progress_callback=..., send ToolProgress for each call."""
+        async def progress_callback(progress: dict[str, Any]) -> None:
+            if self._ws:
+                await self._ws.send(message_to_json(ToolProgress(call_id=call.id, progress=progress)))
+
         try:
-            result = await self.tool_handler(call.tool_name, call.arguments)
+            sig = inspect.signature(self.tool_handler)
+            if "progress_callback" in sig.parameters:
+                result = await self.tool_handler(
+                    call.tool_name, call.arguments, progress_callback=progress_callback
+                )
+            else:
+                result = await self.tool_handler(call.tool_name, call.arguments)
             out = ToolResult(
                 id=str(uuid.uuid4()),
                 call_id=call.id,
@@ -141,7 +154,8 @@ class AgentClient:
                 success=False,
                 error=str(e),
             )
-        await self._ws.send(message_to_json(out))
+        if self._ws:
+            await self._ws.send(message_to_json(out))
 
     async def query(self, query: str, *, query_id: str | None = None) -> QueryResult | Error:
         """Send a query and wait for query_result or error. Only for query agents."""

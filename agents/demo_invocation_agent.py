@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 import config
-from openagent import ToolSchema, register_invocation_agent
+from openagent import ToolSchema, OrchestratorInvocationAgent
 
 TOOLS = [
     ToolSchema(
@@ -35,10 +35,26 @@ TOOLS = [
         },
         endpoint="/get_time",
     ),
+    ToolSchema(
+        name="long_task",
+        description="Run a long-running task that reports progress. Use when the user asks to run a long task or test progress.",
+        parameters={
+            "type": "object",
+            "properties": {"seconds": {"type": "number", "description": "How many seconds to run"}},
+            "required": [],
+        },
+        endpoint="/long_task",
+    ),
 ]
 
 
-async def handle_tool(tool_name: str, arguments: dict) -> str | dict:
+async def handle_tool(
+    tool_name: str,
+    arguments: dict,
+    *,
+    progress_callback_url: str | None = None,
+    call_id: str | None = None,
+) -> str | dict:
     print(f"[demo-invocation-agent] tool_call: {tool_name}({arguments})")
     if tool_name == "echo":
         msg = arguments.get("message", "")
@@ -47,6 +63,29 @@ async def handle_tool(tool_name: str, arguments: dict) -> str | dict:
         tz = arguments.get("timezone") or "UTC"
         now = datetime.now(timezone.utc)
         return {"time": now.isoformat(), "timezone": tz}
+    if tool_name == "long_task":
+        seconds = float(arguments.get("seconds", 3))
+        for i in range(int(seconds * 2) + 1):
+            pct = min(100, int(100 * i / (seconds * 2)))
+            if progress_callback_url and call_id:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        progress_callback_url,
+                        json={
+                            "call_id": call_id,
+                            "progress": {"percent": pct, "message": f"Invocation progress {pct}%", "stage": "running"},
+                        },
+                        timeout=5.0,
+                    )
+            await asyncio.sleep(0.5)
+        if progress_callback_url and call_id:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    progress_callback_url,
+                    json={"call_id": call_id, "progress": {"percent": 100, "message": "Done", "stage": "complete"}},
+                    timeout=5.0,
+                )
+        return {"status": "ok", "seconds": seconds, "agent": "demo-invocation-agent (HTTP)"}
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
@@ -65,10 +104,16 @@ async def _run_impl(request: Request):
     tool_name = body.get("tool_name")
     arguments = body.get("arguments", {})
     callback_url = body.get("callback_url")
+    progress_callback_url = body.get("progress_callback_url")
     if not call_id or not tool_name or not callback_url:
         return {"ok": False, "error": "call_id, tool_name, callback_url required"}
     try:
-        result = await handle_tool(tool_name, arguments)
+        result = await handle_tool(
+            tool_name,
+            arguments,
+            progress_callback_url=progress_callback_url,
+            call_id=call_id,
+        )
         payload = {"call_id": call_id, "success": True, "result": result}
     except Exception as e:
         payload = {"call_id": call_id, "success": False, "error": str(e)}
@@ -87,6 +132,11 @@ async def get_time(request: Request):
     return await _run_impl(request)
 
 
+@app.post("/long_task")
+async def long_task(request: Request):
+    return await _run_impl(request)
+
+
 def _run_server():
     uvicorn.run(app, host=config.INVOCATION_HOST, port=config.INVOCATION_PORT, log_level="warning")
 
@@ -96,12 +146,13 @@ async def main():
     server_thread.start()
     await asyncio.sleep(0.5)  # let server bind
     print(f"Invocation base: {config.INVOCATION_BASE_URL} (tools: /run, /get_time)")
-    print("Registering with master (HTTP, Redis)...")
-    await register_invocation_agent(
+    agent = OrchestratorInvocationAgent(
         "demo-invocation-agent",
         TOOLS,
         config.INVOCATION_BASE_URL,
     )
+    print("Registering with master (HTTP, Redis)...")
+    await agent.register()
     print("Registered. Server running; master will invoke via URL. Ctrl+C to stop.")
     await asyncio.Event().wait()  # run forever
 
