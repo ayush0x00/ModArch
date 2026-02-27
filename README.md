@@ -59,6 +59,38 @@ MASTER_BASE_URL=http://127.0.0.1:8000
 
 Optional for invocation agent: `INVOCATION_BASE_URL`, `INVOCATION_PORT`, `MASTER_WS`.
 
+## Configuration (`config.py`)
+
+All settings are read from the environment (and from `.env` via dotenv). Defaults are below.
+
+| Env variable | Default | Description |
+|--------------|---------|-------------|
+| **Master** | | |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL for agent cache and session store. |
+| `REDIS_AGENT_TTL_SECONDS` | `86400` (24h) | TTL for cached (invocation) agent keys. Refreshed when the agent is used. |
+| `REDIS_SESSION_TTL_SECONDS` | `86400` (24h) | TTL for session keys; conversation history expires after this. |
+| `MASTER_BASE_URL` | `http://127.0.0.1:8000` | Base URL of the master (HTTP). Used for tool callback URL and health. |
+| `OPENAI_API_KEY` | — | **Required.** OpenAI API key for orchestrator and summarizer. |
+| **Orchestrator** | | |
+| `ORCHESTRATOR_MODEL` | `gpt-4o-mini` | Model for decide (answer_directly vs call_tool) and for synthesis when not overridden. |
+| `ORCHESTRATOR_CONTEXT_MAX_TOKENS` | `12000` | Max tokens for orchestrator context (summaries + tail + tools + query). When exceeded, older turns are summarized. |
+| `ORCHESTRATOR_RECENT_TURNS` | `8` | Number of recent raw turns to keep in full before summarizing the rest. |
+| `SUMMARIZER_MODEL` | *(none)* | Model for summarizing long context. If unset, uses `ORCHESTRATOR_MODEL`. |
+| **Timeouts (seconds)** | | |
+| `HEALTH_CHECK_TIMEOUT` | `2.0` | Timeout for master health checks (e.g. invocation agent `/health`). |
+| `TOOL_CALL_TIMEOUT` | `30.0` | Max time to wait for a tool result (WS or HTTP callback) before failing the query. |
+| `TOOL_INVOKE_HTTP_TIMEOUT` | `2.0` | Timeout for master POST to invocation agent's tool endpoint. |
+| **Agents (client → master)** | | |
+| `MASTER_WS` | `ws://127.0.0.1:8000/ws` | WebSocket URL used by query/action agents to connect to the master. |
+| `WS_CONNECT_TIMEOUT` | `10.0` | Timeout for WebSocket connect. |
+| `WS_REGISTRATION_TIMEOUT` | `10.0` | Timeout for registration response after register message. |
+| `QUERY_RESPONSE_TIMEOUT` | `60.0` | Timeout for query agent to receive `query_result` after sending `query`. |
+| `HTTP_REGISTER_TIMEOUT` | `10.0` | Timeout for invocation agent HTTP POST to `/register`. |
+| **Invocation agent (demo)** | | |
+| `INVOCATION_PORT` | `9000` | Default port for demo invocation agent. |
+| `INVOCATION_HOST` | `127.0.0.1` | Host for invocation base URL. |
+| `INVOCATION_BASE_URL` | `http://{INVOCATION_HOST}:{INVOCATION_PORT}` | Full base URL when not set explicitly. |
+
 ## Run
 
 **Terminal 1 – Redis** (required for invocation agents and for master to list known agents)
@@ -137,6 +169,30 @@ Each tool can have its own `endpoint` (e.g. `/run`, `/get_time`).
 - **Master → Agent**: `registered`, `query_result`, `tool_call`, `pong`, `error`
 
 See `protocol/messages.py` for full fields. Register may include `invocation_url` (legacy) for action agents; then the master stores them in Redis and invokes via HTTP.
+
+## Session management
+
+Conversations are **session-scoped**. The master creates or reuses a session per query so multi-turn context is preserved.
+
+- **Storage**: Redis key `session:{session_id}`; value is a JSON array of **turns**. Sessions expire after `REDIS_SESSION_TTL_SECONDS` (default 24h).
+- **Session ID**: First query in a conversation omits `session_id`; the master creates one (UUID) and returns it in `query_result.session_id`. Subsequent queries send that `session_id` so the master loads the same turns.
+- **Turns**: Each turn is a dict: `query`, `query_id`, `decision` (`"answer_directly"` or `"call_tool"`), and for tool calls `tool_agent_id`, `tool_name`, `tool_args`, `result`/`error`. Summary turns (see below) have `decision: "summary"`, `summary`, and `covers_through_index`.
+- **Create/load/append**: `master/session_store.py` — `create_session`, `load_session`, `append_turn`. The orchestrator loads turns before each decision and appends a new turn after each answer or tool result.
+
+A **sample session file** (raw turns plus summary turns as stored in Redis) is at [`experiments/results/samle_session_file.json`](experiments/results/sample_session_file.json). It shows interleaved raw turns (weather queries, tool calls, direct answers) and summary turns with `covers_through_index`.
+
+---
+
+## Summary logic (long context)
+
+When building orchestrator context, we keep token usage bounded by **summarizing older turns** and **persisting summaries in the session**.
+
+- **Context for each query** = **all previous summary turns** (in order) + **all raw turns after the last summary**. So older conversation is compressed into summary blocks; only the “tail” after the last summary is sent in full.
+- **When over limit** (`ORCHESTRATOR_CONTEXT_MAX_TOKENS`): we take the raw tail, keep the last `ORCHESTRATOR_RECENT_TURNS` turns in full, and summarize the rest with the same orchestrator model. We append a **summary turn** to the session: `{"decision": "summary", "summary": "<text>", "covers_through_index": N}`. `covers_through_index` is the index (in the full session list) of the last turn that summary covers; “raw turns after last summary” are all turns with index > last summary’s `covers_through_index`.
+- **Config**: `ORCHESTRATOR_CONTEXT_MAX_TOKENS` (default 12000), `ORCHESTRATOR_RECENT_TURNS` (default 8). Lower them to trigger summarization earlier (e.g. 1200 and 2 for testing).
+- **Token counting**: `master/session_context.py` uses tiktoken (`cl100k_base`). Summarization and message building live in `build_orchestrator_messages_async`; the master appends the returned summary turn to the session when present.
+
+---
 
 ## Clearing Redis
 

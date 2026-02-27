@@ -126,6 +126,9 @@ def main() -> None:
             print(f"[load_server {server_index}] Registered HTTP agent {agent_id} ({len(tools)} tools) on {base_url}")
         else:
             print(f"[load_server {server_index}] HTTP agent {agent_id} on {base_url} (orchestrator will register)")
+        if os.environ.get("OPENAGENT_INVOCATION_ONLY") == "1":
+            # No WebSocket process agents; keep process alive so HTTP server thread stays up.
+            await asyncio.Future()
         process_tasks = [asyncio.create_task(run_process_agent(server_index, j)) for j in range(NUM_PROCESS_AGENTS)]
         print(f"[load_server {server_index}] Started {NUM_PROCESS_AGENTS} process agents")
         try:

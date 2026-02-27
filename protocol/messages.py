@@ -39,6 +39,7 @@ class Query(BaseModel):
     type: Literal["query"] = "query"
     id: str
     query: str
+    session_id: str | None = None
     ts: str | None = None
 
 
@@ -81,6 +82,7 @@ class QueryResult(BaseModel):
     id: str
     result: str | dict[str, Any] | None = None
     error: str | None = None
+    session_id: str | None = None
     ts: str | None = None
 
 

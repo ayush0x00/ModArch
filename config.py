@@ -12,11 +12,19 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 # Redis agent key TTL (seconds). Unused agents expire; used agents get TTL refreshed. Default 1 day.
 REDIS_AGENT_TTL_SECONDS = int(float(os.environ.get("REDIS_AGENT_TTL_SECONDS", "86400")))
+# Session key TTL (seconds). Session conversation history expires after this. Default 24h.
+REDIS_SESSION_TTL_SECONDS = int(float(os.environ.get("REDIS_SESSION_TTL_SECONDS", "86400")))
 MASTER_BASE_URL = os.environ.get("MASTER_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 # Orchestrator
 ORCHESTRATOR_MODEL = os.environ.get("ORCHESTRATOR_MODEL", "gpt-4o-mini")
+# Context window: max tokens for conversation + tools + response when building orchestrator messages.
+ORCHESTRATOR_CONTEXT_MAX_TOKENS = int(os.environ.get("ORCHESTRATOR_CONTEXT_MAX_TOKENS", "12000"))
+# Number of recent turns to keep in full before summarizing older history.
+ORCHESTRATOR_RECENT_TURNS = int(os.environ.get("ORCHESTRATOR_RECENT_TURNS", "8"))
+# Model for summarizing long conversation context (optional; falls back to ORCHESTRATOR_MODEL).
+SUMMARIZER_MODEL = os.environ.get("SUMMARIZER_MODEL") or None
 
 # Timeouts (seconds)
 HEALTH_CHECK_TIMEOUT = float(os.environ.get("HEALTH_CHECK_TIMEOUT", "2.0"))

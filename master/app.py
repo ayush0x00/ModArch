@@ -31,13 +31,15 @@ from protocol import (
 )
 from master.cache import get_agent, get_all_action_agents_snapshot, get_all_cached_agents, refresh_agent_ttl, save_agent
 from master.registry import AgentRegistry
-from master.orchestrator import decide
+from master.orchestrator import decide, decide_with_messages, SYSTEM as ORCHESTRATOR_SYSTEM, synthesize_tool_result
 from master.tracker import AgentTracker
+from master.session_store import create_session, get_or_create_session_id, load_session, append_turn
+from master.session_context import build_orchestrator_messages_async
 
 # App state
 registry = AgentRegistry()
 tracker = AgentTracker()
-pending_tool_results: dict[str, tuple[asyncio.Future[ToolResult], Any, str, str | None]] = {}  # call_id -> (future, query_send, query_id, agent_id_for_ttl|None)
+pending_tool_results: dict[str, tuple[asyncio.Future[ToolResult], Any, str, str | None, str | None, str, str, str, dict]] = {}  # call_id -> (future, send_msg, query_id, agent_id_ttl|None, session_id|None, query_text, agent_id, tool_name, tool_args)
 tool_progress: dict[str, dict[str, Any]] = {}  # call_id -> latest progress (optional feature)
 
 GREEN = "\033[92m"
@@ -205,7 +207,18 @@ async def websocket_endpoint(ws: WebSocket):
                 continue
 
             if isinstance(parsed, Query):
-                # Run orchestrator and either answer_directly or call_tool (snapshot from Redis, fallback to registry)
+                # Resolve session: create or get from client; load turns; build context; run orchestrator
+                session_id: str | None = None
+                if _redis:
+                    session_id = get_or_create_session_id(_redis, getattr(parsed, "session_id", None))
+                    if session_id is None:
+                        session_id = await create_session(_redis)
+                else:
+                    session_id = None
+                turns: list[dict[str, Any]] = []
+                if session_id:
+                    turns = await load_session(_redis, session_id) or []
+                    print(f"[Orchestrator] session_id={session_id}")
                 try:
                     client = get_openai_client()
                     snapshot = await get_all_action_agents_snapshot(_redis) if _redis else []
@@ -215,12 +228,33 @@ async def websocket_endpoint(ws: WebSocket):
                         if a["agent_id"] not in seen:
                             snapshot.append(a)
                             seen.add(a["agent_id"])
-                    decision = await decide(client, config.ORCHESTRATOR_MODEL, parsed.query, snapshot)
+                    if session_id and turns is not None:
+                        messages, summary_turn = await build_orchestrator_messages_async(
+                            turns, parsed.query, snapshot,
+                            config.ORCHESTRATOR_CONTEXT_MAX_TOKENS,
+                            ORCHESTRATOR_SYSTEM,
+                            openai_client=client,
+                        )
+                        if summary_turn and session_id and _redis:
+                            await append_turn(_redis, session_id, summary_turn)
+                        decision = await decide_with_messages(client, config.ORCHESTRATOR_MODEL, messages)
+                    else:
+                        decision = await decide(client, config.ORCHESTRATOR_MODEL, parsed.query, snapshot)
                 except Exception as e:
-                    await send_msg(QueryResult(id=parsed.id, error=str(e)))
+                    await send_msg(QueryResult(id=parsed.id, error=str(e), session_id=session_id))
                     continue
                 if decision.get("action") == "answer_directly":
-                    await send_msg(QueryResult(id=parsed.id, result=decision.get("text", "")))
+                    turn = {
+                        "query": parsed.query,
+                        "query_id": parsed.id,
+                        "decision": "answer_directly",
+                        "result": decision.get("text", ""),
+                        "error": None,
+                        "ts": None,
+                    }
+                    if session_id:
+                        await append_turn(_redis, session_id, turn)
+                    await send_msg(QueryResult(id=parsed.id, result=decision.get("text", ""), session_id=session_id))
                     continue
                 if decision.get("action") == "call_tool":
                     aid = decision.get("agent_id", "")
@@ -243,7 +277,17 @@ async def websocket_endpoint(ws: WebSocket):
                         else:
                             invocation_url = cached.get("invocation_url")  # legacy
 
-                    pending_tool_results[call_id] = (fut, send_msg, parsed.id, aid if invocation_url else None)
+                    pending_tool_results[call_id] = (
+                        fut,
+                        send_msg,
+                        parsed.id,
+                        aid if invocation_url else None,
+                        session_id,
+                        parsed.query,
+                        aid,
+                        tname,
+                        args,
+                    )
 
                     if invocation_url:
                         # HTTP invoke: POST to per-tool URL; callback will complete the future
@@ -263,7 +307,7 @@ async def websocket_endpoint(ws: WebSocket):
                         except Exception as e:
                             pending_tool_results.pop(call_id, None)
                             tool_progress.pop(call_id, None)
-                            await send_msg(QueryResult(id=parsed.id, error=f"Invocation failed: {e}"))
+                            await send_msg(QueryResult(id=parsed.id, error=f"Invocation failed: {e}", session_id=session_id))
                             continue
                     else:
                         # WS invoke (in-memory registry)
@@ -271,7 +315,7 @@ async def websocket_endpoint(ws: WebSocket):
                         if not action_agent:
                             pending_tool_results.pop(call_id, None)
                             tool_progress.pop(call_id, None)
-                            await send_msg(QueryResult(id=parsed.id, error=f"Unknown action agent: {aid}"))
+                            await send_msg(QueryResult(id=parsed.id, error=f"Unknown action agent: {aid}", session_id=session_id))
                             continue
                         print(f"[Orchestrator] calling {aid}.{tname}({args}) via WS")
                         await action_agent.send(ToolCall(id=call_id, tool_name=tname, arguments=args))
@@ -282,16 +326,39 @@ async def websocket_endpoint(ws: WebSocket):
                         pending_tool_results.pop(call_id, None)
                         tool_progress.pop(call_id, None)
                         print(f"[Orchestrator] {aid}.{tname} -> timeout")
-                        await send_msg(QueryResult(id=parsed.id, error="Tool call timed out"))
+                        await send_msg(QueryResult(id=parsed.id, error="Tool call timed out", session_id=session_id))
                         continue
-                    pending_tool_results.pop(call_id, None)
+                    entry = pending_tool_results.pop(call_id, None)
                     tool_progress.pop(call_id, None)
+                    _session_id = entry[4] if entry and len(entry) > 5 else None
+                    query_text = entry[5] if entry and len(entry) > 5 else ""
+                    if _session_id:
+                        turn = {
+                            "query": query_text,
+                            "query_id": entry[2],
+                            "decision": "call_tool",
+                            "tool_agent_id": aid,
+                            "tool_name": tname,
+                            "tool_args": args,
+                            "result": tool_res.result if tool_res.success else None,
+                            "error": tool_res.error,
+                            "ts": None,
+                        }
+                        await append_turn(_redis, _session_id, turn)
                     if tool_res.success:
                         print(f"[Orchestrator] {aid}.{tname} -> ok: {tool_res.result}")
-                        await send_msg(QueryResult(id=parsed.id, result=tool_res.result))
+                        try:
+                            synthesized = await synthesize_tool_result(
+                                client, config.ORCHESTRATOR_MODEL,
+                                query_text, tname, tool_res.result,
+                            )
+                            await send_msg(QueryResult(id=parsed.id, result=synthesized, session_id=session_id))
+                        except Exception as e:
+                            print(f"[Orchestrator] synthesize failed: {e}, sending raw result")
+                            await send_msg(QueryResult(id=parsed.id, result=tool_res.result, session_id=session_id))
                     else:
                         print(f"[Orchestrator] {aid}.{tname} -> error: {tool_res.error}")
-                        await send_msg(QueryResult(id=parsed.id, error=tool_res.error or "Tool failed"))
+                        await send_msg(QueryResult(id=parsed.id, error=tool_res.error or "Tool failed", session_id=session_id))
                     continue
 
             if isinstance(parsed, ToolProgress):
@@ -305,6 +372,7 @@ async def websocket_endpoint(ws: WebSocket):
                     fut = entry[0]
                     if not fut.done():
                         fut.set_result(parsed)
+                    # Turn is appended in the main Query handler after await fut (single place for both HTTP and WS)
                 tool_progress.pop(parsed.call_id, None)
                 continue
 
@@ -339,7 +407,14 @@ async def tool_callback(request: Request):
     entry = pending_tool_results.get(call_id)
     if not entry:
         return JSONResponse({"ok": False, "error": "Unknown or expired call_id"}, status_code=404)
-    fut, send_msg, query_id, agent_id_ttl = entry
+    fut, send_msg, query_id, agent_id_ttl, session_id, query_text, agent_id, tool_name, tool_args = (
+        entry[0], entry[1], entry[2], entry[3],
+        entry[4] if len(entry) > 5 else None,
+        entry[5] if len(entry) > 5 else "",
+        entry[6] if len(entry) > 6 else "",
+        entry[7] if len(entry) > 7 else "",
+        entry[8] if len(entry) > 8 else {},
+    )
     if not fut.done():
         tool_res = ToolResult(
             id=str(uuid.uuid4()),
@@ -349,6 +424,7 @@ async def tool_callback(request: Request):
             error=error,
         )
         fut.set_result(tool_res)
+    # Turn is appended in the main Query handler after await fut (single place for HTTP and WS)
     if success and agent_id_ttl and _redis:
         await refresh_agent_ttl(_redis, agent_id_ttl)
     tool_progress.pop(call_id, None)

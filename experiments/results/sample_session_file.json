@@ -1,0 +1,159 @@
+[
+    {
+        "query": "What is the weather in San Francisco?",
+        "query_id": "f43b50cc-833b-42b2-a8b2-e34f7f512a5c",
+        "decision": "call_tool",
+        "tool_agent_id": "complex-app-1",
+        "tool_name": "weather_s1_current",
+        "tool_args": {
+            "city": "San Francisco"
+        },
+        "result": {
+            "city": "San Francisco",
+            "temperature": 22,
+            "unit": "C",
+            "conditions": "partly cloudy"
+        },
+        "error": null,
+        "ts": null
+    },
+    {
+        "query": "What is the 3-day forecast for San Francisco?",
+        "query_id": "6a904bd5-7605-475b-9271-701e7ceddfc0",
+        "decision": "call_tool",
+        "tool_agent_id": "complex-app-1",
+        "tool_name": "weather_s1_forecast_3day",
+        "tool_args": {
+            "city": "San Francisco"
+        },
+        "result": {
+            "city": "San Francisco",
+            "days": [
+                {
+                    "day": 1,
+                    "high": 21,
+                    "low": 11,
+                    "conditions": "sunny"
+                },
+                {
+                    "day": 2,
+                    "high": 22,
+                    "low": 12,
+                    "conditions": "sunny"
+                },
+                {
+                    "day": 3,
+                    "high": 23,
+                    "low": 13,
+                    "conditions": "sunny"
+                }
+            ]
+        },
+        "error": null,
+        "ts": null
+    },
+    {
+        "query": "What is the air quality in San Francisco?",
+        "query_id": "7adb9374-486f-4e52-a385-2fb7c2e868ca",
+        "decision": "call_tool",
+        "tool_agent_id": "complex-app-1",
+        "tool_name": "weather_s1_air_quality",
+        "tool_args": {
+            "city": "San Francisco"
+        },
+        "result": {
+            "city": "San Francisco",
+            "aqi": 42,
+            "level": "good"
+        },
+        "error": null,
+        "ts": null
+    },
+    {
+        "decision": "summary",
+        "summary": "The user inquired about the weather in San Francisco, and the assistant provided the current weather conditions, stating that the temperature is 22\u00b0C and the weather is partly cloudy.",
+        "covers_through_index": 0,
+        "ts": null
+    },
+    {
+        "query": "What is the humidity in San Francisco?",
+        "query_id": "a7c14605-d601-473f-81da-f23602a6cd0a",
+        "decision": "call_tool",
+        "tool_agent_id": "complex-app-1",
+        "tool_name": "weather_s1_humidity",
+        "tool_args": {
+            "city": "San Francisco"
+        },
+        "result": {
+            "city": "San Francisco",
+            "humidity_percent": 65
+        },
+        "error": null,
+        "ts": null
+    },
+    {
+        "decision": "summary",
+        "summary": "The user inquired about the 3-day weather forecast for San Francisco, and the assistant provided the forecast, indicating that the weather will be sunny with high temperatures of 21\u00b0C, 22\u00b0C, and 23\u00b0C, and low temperatures of 11\u00b0C, 12\u00b0C, and 13\u00b0C over the three days.",
+        "covers_through_index": 1,
+        "ts": null
+    },
+    {
+        "query": "What is the wind like in San Francisco?",
+        "query_id": "4e60af6d-1d6b-4c7e-bc90-1f637c683a9f",
+        "decision": "call_tool",
+        "tool_agent_id": "complex-app-1",
+        "tool_name": "weather_s1_wind",
+        "tool_args": {
+            "city": "San Francisco"
+        },
+        "result": {
+            "city": "San Francisco",
+            "speed_kmh": 15,
+            "direction": "NW"
+        },
+        "error": null,
+        "ts": null
+    },
+    {
+        "decision": "summary",
+        "summary": "The user inquired about the air quality in San Francisco, and the assistant responded by retrieving data indicating that the air quality index (AQI) is 42, which falls under the 'good' category.",
+        "covers_through_index": 2,
+        "ts": null
+    },
+    {
+        "query": "What did I ask in my first question?",
+        "query_id": "7f34b7f2-91a6-4af2-b55a-a447ab805311",
+        "decision": "answer_directly",
+        "result": "You asked about the weather in San Francisco.",
+        "error": null,
+        "ts": null
+    },
+    {
+        "decision": "summary",
+        "summary": "The user inquired about the humidity in San Francisco, and the assistant responded by retrieving data from a weather tool, indicating that the humidity is 65%.",
+        "covers_through_index": 4,
+        "ts": null
+    },
+    {
+        "query": "What did I ask in my second question?",
+        "query_id": "8534745b-a109-4e78-9250-74278ac57f53",
+        "decision": "answer_directly",
+        "result": "You asked about the 3-day weather forecast for San Francisco.",
+        "error": null,
+        "ts": null
+    },
+    {
+        "decision": "summary",
+        "summary": "The user inquired about the wind conditions in San Francisco, and the assistant provided the information that the wind speed is 15 km/h coming from the northwest.",
+        "covers_through_index": 6,
+        "ts": null
+    },
+    {
+        "query": "Summarize everything we've discussed about San Francisco.",
+        "query_id": "26775b87-9c4c-465d-baa3-b3408297d37a",
+        "decision": "answer_directly",
+        "result": "We've discussed the current weather, 3-day forecast, air quality, humidity, and wind conditions in San Francisco.",
+        "error": null,
+        "ts": null
+    }
+]

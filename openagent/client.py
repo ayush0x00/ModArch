@@ -157,13 +157,15 @@ class AgentClient:
         if self._ws:
             await self._ws.send(message_to_json(out))
 
-    async def query(self, query: str, *, query_id: str | None = None) -> QueryResult | Error:
-        """Send a query and wait for query_result or error. Only for query agents."""
+    async def query(self, query: str, *, query_id: str | None = None, session_id: str | None = None) -> QueryResult | Error:
+        """Send a query and wait for query_result or error. Only for query agents.
+        Pass session_id to continue a conversation (follow-up); omit for a new session."""
         qid = query_id or str(uuid.uuid4())
         fut: asyncio.Future[QueryResult | Error] = asyncio.get_event_loop().create_future()
         self._pending_queries[qid] = fut
         try:
-            await self._ws.send(message_to_json(Query(id=qid, query=query)))
+            msg = Query(id=qid, query=query, session_id=session_id)
+            await self._ws.send(message_to_json(msg))
             return await asyncio.wait_for(fut, timeout=config.QUERY_RESPONSE_TIMEOUT)
         finally:
             self._pending_queries.pop(qid, None)
